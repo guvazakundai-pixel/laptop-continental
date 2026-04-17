@@ -590,6 +590,8 @@ tbody tr:last-child td{border:none}
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 <script>
 const DEFAULT_SETTINGS={siteName:"LaptopContinental",tagline:"Premium Laptops in Zimbabwe",whatsapp:"263776669049",phone:"+263 77 666 9049",currency:"$",footerDesc:"Laptops for work, study, and everything in between. Delivered across Zimbabwe.",adminPassword:"admin123"};
 const DEFAULT_CATEGORIES=[
@@ -635,13 +637,91 @@ const DEFAULT_PRODUCTS=[
 ];
 
 let products=[],settings={},categories=[],currentFilter='all',currentSort='default',editingId=null,editingImages=[],editingBadges=[],adminAuth=false;
+let fbApp=null,fbDb=null,fbUnsub=null,fbReady=false,firebaseConfig=null;
 
-function loadData(){
+function loadLocalCache(){
   try{const p=localStorage.getItem('lc_products_v2');products=p?JSON.parse(p):JSON.parse(JSON.stringify(DEFAULT_PRODUCTS))}catch{products=JSON.parse(JSON.stringify(DEFAULT_PRODUCTS))}
   try{const s=localStorage.getItem('lc_settings_v2');settings=s?{...DEFAULT_SETTINGS,...JSON.parse(s)}:{...DEFAULT_SETTINGS}}catch{settings={...DEFAULT_SETTINGS}}
   try{const c=localStorage.getItem('lc_categories_v2');categories=c?JSON.parse(c):JSON.parse(JSON.stringify(DEFAULT_CATEGORIES))}catch{categories=JSON.parse(JSON.stringify(DEFAULT_CATEGORIES))}
 }
-function saveAll(){localStorage.setItem('lc_products_v2',JSON.stringify(products));localStorage.setItem('lc_settings_v2',JSON.stringify(settings));localStorage.setItem('lc_categories_v2',JSON.stringify(categories))}
+function saveLocalCache(){localStorage.setItem('lc_products_v2',JSON.stringify(products));localStorage.setItem('lc_settings_v2',JSON.stringify(settings));localStorage.setItem('lc_categories_v2',JSON.stringify(categories))}
+
+function loadFirebaseConfig(){
+  try{const s=localStorage.getItem('lc_firebase_config');if(s){firebaseConfig=JSON.parse(s);return true}}catch{}
+  return false;
+}
+function saveFirebaseConfig(c){firebaseConfig=c;localStorage.setItem('lc_firebase_config',JSON.stringify(c))}
+function clearFirebaseConfig(){firebaseConfig=null;localStorage.removeItem('lc_firebase_config');if(fbUnsub){fbUnsub();fbUnsub=null}fbApp=null;fbDb=null;fbReady=false}
+
+async function initFirebase(){
+  if(!firebaseConfig||!window.firebase)return false;
+  try{
+    if(!fbApp){
+      fbApp=firebase.initializeApp(firebaseConfig);
+      fbDb=firebase.firestore();
+    }
+    fbReady=true;
+    return true;
+  }catch(e){console.error('Firebase init failed',e);fbReady=false;return false}
+}
+
+async function loadData(){
+  loadLocalCache();
+  loadFirebaseConfig();
+  if(!firebaseConfig)return;
+  if(!(await initFirebase()))return;
+  try{
+    const doc=await fbDb.collection('store').doc('data').get();
+    if(doc.exists){
+      const d=doc.data();
+      if(d.products)products=d.products;
+      if(d.categories)categories=d.categories;
+      if(d.settings)settings={...DEFAULT_SETTINGS,...d.settings};
+      saveLocalCache();
+      applySettings();renderStore();
+    }else{
+      // First connection - seed with defaults / local data
+      await pushToFirebase();
+    }
+    attachRealtimeSync();
+  }catch(e){console.error('Firestore load failed',e);toast('Cloud sync error — working offline','error')}
+}
+
+function attachRealtimeSync(){
+  if(!fbDb)return;
+  if(fbUnsub){fbUnsub();fbUnsub=null}
+  fbUnsub=fbDb.collection('store').doc('data').onSnapshot(snap=>{
+    if(!snap.exists)return;
+    const d=snap.data();
+    if(d.products)products=d.products;
+    if(d.categories)categories=d.categories;
+    if(d.settings)settings={...DEFAULT_SETTINGS,...d.settings};
+    saveLocalCache();
+    applySettings();
+    if($('admin').style.display==='block'&&adminAuth){
+      // Don't clobber admin forms while user is editing
+      const visible=document.querySelector('.side-item.active')?.dataset.tab;
+      if(visible==='dashboard')renderAdminDashboard();
+      else if(visible==='products'&&!editingId)renderAdminProducts();
+      else if(visible==='categories')renderAdminCategories();
+    }else{
+      renderStore();
+    }
+  },err=>console.error('Realtime sync error',err));
+}
+
+async function pushToFirebase(){
+  if(!fbDb)return;
+  await fbDb.collection('store').doc('data').set({products,categories,settings,updatedAt:Date.now()});
+}
+
+async function saveAll(){
+  saveLocalCache();
+  if(fbDb&&fbReady){
+    try{await pushToFirebase()}
+    catch(e){console.error('Cloud save failed',e);toast('Saved locally, cloud sync failed','error')}
+  }
+}
 function $(id){return document.getElementById(id)}
 function cur(){return settings.currency||'$'}
 function money(n){return cur()+Number(n).toLocaleString()}
@@ -1117,6 +1197,24 @@ function renderAdminSettings(){
     <div class="card-block"><div class="card-head"><h3>Footer</h3></div><div class="card-body">
       <div class="field"><label>Footer Description</label><textarea id="st-fdesc">${esc(settings.footerDesc||'')}</textarea></div>
     </div></div>
+    <div class="card-block"><div class="card-head">
+      <h3>☁️ Cloud Sync ${fbReady?'<span class="chip-sm chip-active" style="margin-left:8px">Connected</span>':'<span class="chip-sm chip-muted" style="margin-left:8px">Not Connected</span>'}</h3>
+    </div><div class="card-body">
+      ${fbReady?`
+        <p style="color:var(--muted);margin-bottom:14px;font-size:.9rem">Your store is syncing in real-time across all devices. Any change here appears instantly on phones, other browsers, and for all visitors.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-sm btn-outline2" onclick="pushLocalToCloud()">Push local data to cloud</button>
+          <button class="btn-sm btn-danger" onclick="disconnectFirebase()">Disconnect</button>
+        </div>
+      `:`
+        <p style="color:var(--muted);margin-bottom:14px;font-size:.9rem">Connect Firebase to sync your store across all devices. <a href="https://console.firebase.google.com/" target="_blank" style="color:var(--accent)">Create a free project</a>, enable Firestore in <b>test mode</b>, then paste your config below.</p>
+        <div class="field">
+          <label>Firebase Config (paste the <code>firebaseConfig</code> object)</label>
+          <textarea id="fb-config" placeholder='{\n  "apiKey": "...",\n  "authDomain": "...",\n  "projectId": "...",\n  "storageBucket": "...",\n  "messagingSenderId": "...",\n  "appId": "..."\n}' style="font-family:var(--mono);font-size:.8rem;min-height:160px"></textarea>
+        </div>
+        <button class="btn-sm btn-dark" onclick="connectFirebase()">Connect</button>
+      `}
+    </div></div>
     <div class="card-block"><div class="card-head"><h3>Password</h3></div><div class="card-body">
       <div class="form-grid">
         <div class="field"><label>Current</label><input type="password" id="st-oldpw"></div>
@@ -1124,6 +1222,52 @@ function renderAdminSettings(){
       </div>
       <button class="btn-sm btn-dark" onclick="changePassword()">Update Password</button>
     </div></div>`;
+}
+
+async function connectFirebase(){
+  const raw=$('fb-config').value.trim();
+  if(!raw){toast('Paste your Firebase config','error');return}
+  let cfg;
+  try{
+    // Accept either pure JSON or JS-style object literal
+    const cleaned=raw.replace(/const\s+firebaseConfig\s*=\s*/,'').replace(/;?\s*$/,'').replace(/([{,]\s*)([a-zA-Z_$][\w$]*)\s*:/g,'$1"$2":').replace(/'/g,'"');
+    cfg=JSON.parse(cleaned);
+  }catch(e){toast('Invalid config format','error');return}
+  if(!cfg.apiKey||!cfg.projectId){toast('Config missing apiKey or projectId','error');return}
+  saveFirebaseConfig(cfg);
+  toast('Connecting to Firebase...');
+  const ok=await initFirebase();
+  if(!ok){toast('Connection failed','error');clearFirebaseConfig();return}
+  try{
+    const doc=await fbDb.collection('store').doc('data').get();
+    if(doc.exists){
+      // Merge cloud data into local
+      const d=doc.data();
+      if(d.products)products=d.products;
+      if(d.categories)categories=d.categories;
+      if(d.settings)settings={...DEFAULT_SETTINGS,...d.settings};
+    }else{
+      // Push local data up as seed
+      await pushToFirebase();
+    }
+    saveLocalCache();
+    attachRealtimeSync();
+    toast('Connected! Syncing across devices','success');
+    renderAdminSettings();applySettings();renderStore();
+  }catch(e){
+    console.error(e);toast('Connected but data sync failed: '+e.message,'error');
+  }
+}
+
+async function pushLocalToCloud(){
+  if(!confirm('Overwrite cloud data with what you see now? This replaces data on all other devices.'))return;
+  try{await pushToFirebase();toast('Pushed to cloud','success')}
+  catch(e){toast('Push failed','error')}
+}
+
+function disconnectFirebase(){
+  if(!confirm('Disconnect Firebase? Your store will become single-device again.'))return;
+  clearFirebaseConfig();toast('Disconnected','success');renderAdminSettings();
 }
 function saveSettingsForm(){settings.siteName=$('st-name').value.trim()||settings.siteName;settings.tagline=$('st-tag').value.trim();settings.currency=$('st-cur').value.trim()||'$';settings.whatsapp=$('st-wa').value.trim().replace(/\D/g,'');settings.phone=$('st-phone').value.trim();settings.footerDesc=$('st-fdesc').value.trim();saveAll();toast('Saved','success')}
 function changePassword(){const o=$('st-oldpw').value;const n=$('st-newpw').value;if(o!==(settings.adminPassword||'admin123')){toast('Wrong current password','error');return}if(!n||n.length<4){toast('Min 4 chars','error');return}settings.adminPassword=n;saveAll();$('st-oldpw').value='';$('st-newpw').value='';toast('Password changed','success')}
@@ -1158,7 +1302,8 @@ document.addEventListener('keydown',e=>{
   if(keyBuf==='ADMN'&&$('admin').style.display!=='block')showAdmin();
 });
 
-loadData();applySettings();renderStore();
+loadLocalCache();applySettings();renderStore();
+loadData();
 </script>
 </body>
 </html>
