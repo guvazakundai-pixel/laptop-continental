@@ -954,11 +954,18 @@ function openProductForm(p){
       <div class="section-divider">Images (up to 8)</div>
       <div class="img-manager">
         <div class="img-list" id="img-list"></div>
-        <div class="url-adder">
-          <input id="new-img-url" placeholder="Paste image URL..." onkeydown="if(event.key==='Enter'){event.preventDefault();addImage()}">
-          <button class="btn-sm btn-dark" onclick="addImage()">Add</button>
+        <div class="url-adder" style="margin-bottom:8px">
+          <button class="btn-sm btn-dark" onclick="document.getElementById('img-file').click()" style="flex:1;justify-content:center;padding:10px 14px">
+            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+            Upload from device
+          </button>
+          <input type="file" id="img-file" accept="image/*" multiple style="display:none" onchange="uploadImages(event)">
         </div>
-        <p style="font-size:.76rem;color:var(--muted)">First image is primary. Use arrows to reorder.</p>
+        <div class="url-adder">
+          <input id="new-img-url" placeholder="…or paste an image URL" onkeydown="if(event.key==='Enter'){event.preventDefault();addImage()}">
+          <button class="btn-sm btn-outline2" onclick="addImage()">Add</button>
+        </div>
+        <p style="font-size:.76rem;color:var(--muted)">First image is primary. Use arrows to reorder. Uploads are auto-compressed.</p>
       </div>
 
       <div class="section-divider">Badges</div>
@@ -1003,6 +1010,44 @@ function renderImageList(){
   list.innerHTML=slots+es;
 }
 function addImage(){const i=$('new-img-url');const u=i.value.trim();if(!u){toast('Paste a URL','error');return}if(editingImages.length>=8){toast('Max 8 images','error');return}editingImages.push(u);i.value='';renderImageList()}
+
+async function uploadImages(e){
+  const files=Array.from(e.target.files||[]);e.target.value='';
+  if(!files.length)return;
+  const slots=8-editingImages.length;
+  if(slots<=0){toast('Max 8 images','error');return}
+  const take=files.slice(0,slots);
+  toast(`Compressing ${take.length} image${take.length>1?'s':''}...`);
+  for(const f of take){
+    try{const dataUrl=await compressImage(f,1400,.82);editingImages.push(dataUrl)}
+    catch(err){toast('Upload failed','error');console.error(err)}
+  }
+  renderImageList();
+  toast(`Added ${take.length} image${take.length>1?'s':''}`,'success');
+  if(files.length>slots)toast(`${files.length-slots} skipped (max 8)`,'error');
+}
+
+function compressImage(file,maxDim=1400,quality=.82){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('read failed'));
+    reader.onload=()=>{
+      const img=new Image();
+      img.onerror=()=>reject(new Error('decode failed'));
+      img.onload=()=>{
+        let w=img.width,h=img.height;
+        if(w>maxDim||h>maxDim){const r=Math.min(maxDim/w,maxDim/h);w=Math.round(w*r);h=Math.round(h*r)}
+        const c=document.createElement('canvas');c.width=w;c.height=h;
+        const ctx=c.getContext('2d');
+        ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);
+        ctx.drawImage(img,0,0,w,h);
+        resolve(c.toDataURL('image/jpeg',quality));
+      };
+      img.src=reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 function removeImg(i){editingImages.splice(i,1);renderImageList()}
 function moveImg(i,d){const j=i+d;if(j<0||j>=editingImages.length)return;[editingImages[i],editingImages[j]]=[editingImages[j],editingImages[i]];renderImageList()}
 function toggleBadge(b,on){if(on){if(!editingBadges.includes(b))editingBadges.push(b)}else{editingBadges=editingBadges.filter(x=>x!==b)}document.querySelectorAll('.badge-check').forEach(el=>{const cb=el.querySelector('input');el.classList.toggle('selected',cb.checked)})}
