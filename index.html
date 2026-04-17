@@ -637,6 +637,14 @@ const DEFAULT_PRODUCTS=[
 ];
 
 let products=[],settings={},categories=[],currentFilter='all',currentSort='default',editingId=null,editingImages=[],editingBadges=[],adminAuth=false;
+const DEFAULT_FIREBASE_CONFIG={
+  apiKey:"AIzaSyCJXvvvgs8qWBRM07CrX3txlBHYk-uVYJ0",
+  authDomain:"laptop-continetal.firebaseapp.com",
+  projectId:"laptop-continetal",
+  storageBucket:"laptop-continetal.firebasestorage.app",
+  messagingSenderId:"859283011492",
+  appId:"1:859283011492:web:de1fab803c9e67b4db3331"
+};
 let fbApp=null,fbDb=null,fbUnsub=null,fbReady=false,firebaseConfig=null;
 
 function loadLocalCache(){
@@ -648,6 +656,7 @@ function saveLocalCache(){localStorage.setItem('lc_products_v2',JSON.stringify(p
 
 function loadFirebaseConfig(){
   try{const s=localStorage.getItem('lc_firebase_config');if(s){firebaseConfig=JSON.parse(s);return true}}catch{}
+  if(DEFAULT_FIREBASE_CONFIG&&DEFAULT_FIREBASE_CONFIG.projectId){firebaseConfig=DEFAULT_FIREBASE_CONFIG;return true}
   return false;
 }
 function saveFirebaseConfig(c){firebaseConfig=c;localStorage.setItem('lc_firebase_config',JSON.stringify(c))}
